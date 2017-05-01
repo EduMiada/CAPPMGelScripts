@@ -1,0 +1,146 @@
+<gel:script xmlns:core="jelly:core"
+			xmlns:gel="jelly:com.niku.union.gel.GELTagLibrary"
+			xmlns:sql="jelly:sql"
+			xmlns:soap="jelly:com.niku.union.gel.SOAPTagLibrary" 
+			xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+			xmlns:xog="http://www.niku.com/xog">
+
+			<gel:parameter default="http://miaed02" var="XOGURL"/>
+			<gel:parameter default="admin" var="XOGUsername"/>
+			<gel:parameter default="clarity" secure="true"  var="XOGPassword"/>
+			<gel:parameter default="latam190" var="DBOWNER"/>
+			<gel:parameter default="c:\temp" var="XOGlogFolder"/>
+			<gel:parameter default="1" var="DebugLevel"/>
+
+			<core:if test="${DebugLevel &gt; 0}">
+				<gel:log level="debug" message="LOG001a: Username = ${XOGUsername}"/>
+				<gel:log level="debug" message="LOG001b: Password = ${XOGPassword}"/>
+				<gel:log level="debug" message="LOG001c: gel_objectInstanceId = ${gel_objectInstanceId}"/>
+			</core:if>
+			
+			<!--XML HEADER DEFINITION FOR XOG -->
+			<gel:parse var="xmldoc">
+				<NikuDataBus xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../xsd/nikuxog_project.xsd">
+					<Header action="write" externalSource="NIKU" objectType="project" version="13.3.0.286"/>
+					<Projects/>
+				</NikuDataBus>
+			</gel:parse>
+			<!--END XML HEADER DEFINITION FOR XOG -->
+
+			<!--CLARITY DB CONNECTION-->
+            <gel:setDataSource dbId="niku" var="NikuDS"/>
+
+			<sql:query  dataSource="${NikuDS}" var="sqlResult" escapeText="false" >	
+			<![CDATA[
+				SELECT      inv.code PROJECT_CODE, 
+							inv.name PROJECT_NAME,
+							obst.unique_name OBS_EXEC_DEPARTMENT_ID,
+							obst.name OBS_EXEC_DEPARTMENT_NAME,              
+							${DBOWNER}.NBI_GET_OBS_FLAT_PATH_FCT (obsu.id) OBS_EXEC_DEPARTMENT_PATH,
+							inv.entity_code ENTITY_CODE
+				FROM        prj_obs_associations obsa,
+							prj_obs_units obsu,
+							prj_obs_types obst,
+							inv_investments inv
+				WHERE       inv.idea_id = obsa.record_id
+							and obsu.id = obsa.unit_id
+							and obsu.type_id = obst.id
+							and inv.id = ${gel_objectInstanceId}
+			]]>
+			</sql:query>
+			
+			<core:if test="${DebugLevel &gt; 0}">
+					<gel:log level="debug" message="Quantidade de OBS  ${sqlResult.getRowCount() }"/>
+				</core:if>
+				
+			
+			
+			
+			<core:if test="${sqlResult.getRowCount() &gt; 0}">
+				<core:if test="${DebugLevel &gt; 0}">
+					<gel:log level="debug" message="Quantidade de OBS  ${sqlResult.getRowCount()}"/>
+				</core:if>
+				
+				<gel:parse var="xmldoc_instance">
+					<Project name="${sqlResult.rows[0].PROJECT_NAME}" projectID="${sqlResult.rows[0].PROJECT_CODE}" entityCode="${sqlResult.rows[0].ENTITY_CODE}">
+						<OBSAssocs completed="true"/>
+					</Project>
+				</gel:parse>
+									
+				<!--INICIO LOOP NOS REGISTROS DE TAREFAS E SEMANAS-->
+				<core:forEach trim="true" items="${sqlResult.rows}" var="row">
+					<gel:parse var="xmldoc_obs">
+						<OBSAssoc id="${row.OBS_EXEC_DEPARTMENT_ID}" name="${row.OBS_EXEC_DEPARTMENT_NAME}" unitPath="${row.OBS_EXEC_DEPARTMENT_PATH}"/>
+					</gel:parse>				
+					<gel:set value="${xmldoc_obs}" select="$xmldoc_instance/Project/OBSAssocs" insert="true"/>
+				</core:forEach>
+	
+				<gel:set value="${xmldoc_instance}" select="$xmldoc/NikuDataBus/Projects" insert="true"/>
+			
+				<core:if test="${DebugLevel &gt; 1}">
+					<gel:serialize fileName="c:\temp\parsed_xml.xml" var="${xmldoc}"/>
+				</core:if>
+
+							
+				<!-- XOG in the value -->	
+				<!-- Log in -->
+				<soap:invoke endpoint="${XOGURL}/niku/xog" var="auth">
+					<soap:message>
+						  <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" 	xmlns:xog="http://www.niku.com/xog">
+							   <soapenv:Header/>
+								 <soapenv:Body>
+									   <xog:Login>
+											  <xog:Username>${XOGUsername}</xog:Username>
+											  <xog:Password>${XOGPassword}</xog:Password>
+										  </xog:Login>
+								  </soapenv:Body>
+						  </soapenv:Envelope>
+					</soap:message>
+				</soap:invoke>
+				
+				 <gel:set asString="true" select="$auth/soapenv:Envelope/soapenv:Body/xog:SessionID/text()" var="v_sessionID"/>
+				 <core:choose>
+					<core:when test="${v_sessionID == null}">	
+						<gel:log level="debug" message="LOG004: XOG Login FAILED"/>
+					</core:when>
+					<core:otherwise/>
+				 </core:choose>
+				 <core:if test="${v_sessionID != null}">		 
+					<core:if test="${DebugLevel &gt; 0}">
+						<gel:log level="debug" message="LOG004: Logged in with ${XOGUsername}"/>
+					</core:if>
+			
+					<!-- Store session ID -->
+				
+					<gel:set asString="true" select="$auth/soapenv:Envelope/soapenv:Body/xog:SessionID/text()" var="sessionID"/>
+					
+					<core:if test="${DebugLevel &gt; 0}">
+						<gel:log level="debug" message="LOG005: Session ID=${sessionID}"/>
+					</core:if>
+				
+					<!-- Invoke XOG to update the database -->
+				
+					<soap:invoke endpoint="${XOGURL}/niku/xog" var="vResults">
+						<soap:message>
+							<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xog="http://www.niku.com/xog">
+								<soapenv:Header>
+									<xog:Auth>
+										<xog:SessionID>${sessionID}</xog:SessionID>
+									</xog:Auth>
+								</soapenv:Header>					
+									<soapenv:Body>
+										<gel:include select="$xmldoc"/>
+									</soapenv:Body>
+							</soapenv:Envelope>
+						</soap:message>
+					</soap:invoke>
+					<core:if test="${DebugLevel &gt; 0}">
+						<gel:log level="debug" message="LOG007: vResults = ${vResults}"/>	
+					</core:if>
+					
+					<core:if test="${DebugLevel &gt; 0}">
+						<gel:log level="debug" message="LOG008: XOG was invoked"/>	
+					</core:if>
+				</core:if>				
+			</core:if>
+</gel:script>
